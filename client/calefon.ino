@@ -21,7 +21,7 @@ TCPClient client;
 byte server[] = { 162, 243, 62, 133 };
 int port = 9001;
 unsigned long lastServerUpdate = 0;
-unsigned long serverUpdateFrequency = 15*60*1000;
+unsigned long serverUpdateFrequency = 2*60*1000; // 2 minutes
 
 range new_ranges[max_ranges];
 unsigned long new_reference_time;

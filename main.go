@@ -24,6 +24,7 @@ type When struct {
 }
 
 func handleConnection(conn net.Conn) {
+  defer conn.Close()
   fmt.Printf("%v Connection from %v\n", time.Now().Format(time.Stamp), conn.RemoteAddr())
   referenceTime := time.Now()
 
