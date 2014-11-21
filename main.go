@@ -3,66 +3,75 @@ package main
 import (
   "net/http"
   "fmt"
-  "io/ioutil"
-  "encoding/xml"
   "time"
   "encoding/binary"
   "net"
+  calendar "code.google.com/p/google-api-go-client/calendar/v3"
+  "code.google.com/p/goauth2/oauth"
 )
 
-type Feed struct {
-  Entries []Entry `xml:"entry"`
+var oauthconfig = &oauth.Config{
+  ClientId: ClientId,
+  ClientSecret: ClientSecret,
+  Scope: calendar.CalendarScope,
+  AuthURL: "https://accounts.google.com/o/oauth2/auth",
+  TokenURL: "https://accounts.google.com/o/oauth2/token",
+  TokenCache: oauth.CacheFile("cache.json"),
+  RedirectURL: "http://localhost:8081/oauthcallback",
+  AccessType: "offline",
 }
 
-type Entry struct {
-  When When `xml:"http://schemas.google.com/g/2005 when"`
-}
+var transport *oauth.Transport = &oauth.Transport{Config: oauthconfig}
 
-type When struct {
-  StartTime string `xml:"startTime,attr"`
-  EndTime string `xml:"endTime,attr"`
+func Log(message string, a ...interface{}) {
+  message = fmt.Sprintf(message, a...)
+  fmt.Printf("%v %v\n", time.Now().Format(time.Stamp), message)
 }
 
 func handleConnection(conn net.Conn) {
   defer conn.Close()
-  fmt.Printf("%v Connection from %v\n", time.Now().Format(time.Stamp), conn.RemoteAddr())
+  Log("Connection from %v", conn.RemoteAddr())
   referenceTime := time.Now()
 
-  // I guess this URL shouldn't be in the repo, but I think no harm can be done with it. Be nice :)
-  resp, err := http.Get("https://www.google.com/calendar/feeds/ppl11p5l4ulont1d4ogue1dqos%40group.calendar.google.com/private-7d768e7805fe231218a3dfb54977c41d/free-busy?singleevents=true&sortorder=a&orderby=starttime&futureevents=true")
+  client := transport.Client()
+  service, err := calendar.New(client)
   if err != nil {
-    fmt.Println(err)
-  } else {
-    defer resp.Body.Close()
-    body, _ := ioutil.ReadAll(resp.Body)
-    
-    var feed Feed
-    xml.Unmarshal(body, &feed)
-   
-    for i:=0; i < len(feed.Entries) && i < 20; i++ {
-      entry := feed.Entries[i]
-      startTime, _ := time.Parse(time.RFC3339, entry.When.StartTime)
-      endTime, _ := time.Parse(time.RFC3339, entry.When.EndTime)
-      startInt := int32(startTime.Sub(referenceTime)/time.Millisecond)
-      endInt := int32(endTime.Sub(referenceTime)/time.Millisecond)
-      binary.Write(conn, binary.LittleEndian, startInt)
-      binary.Write(conn, binary.LittleEndian, endInt) 
-    }
-    var zero int32 = 0
-    binary.Write(conn, binary.LittleEndian, zero)
-    binary.Write(conn, binary.LittleEndian, zero)
+    Log("calendar.New error %v", err)
+    return
   }
+  calendarId := "ppl11p5l4ulont1d4ogue1dqos@group.calendar.google.com"
+  response, err := service.Freebusy.Query(&calendar.FreeBusyRequest{
+    Items: []*calendar.FreeBusyRequestItem{&calendar.FreeBusyRequestItem{calendarId}},
+    TimeMin: referenceTime.Format(time.RFC3339),
+    TimeMax: referenceTime.Add(time.Hour*24*7).Format(time.RFC3339),
+  }).Do()
+  if err != nil {
+    Log("service.FreeBusy.Query.Do error %v", err)
+    return
+  }
+  var freeBusyCalendar = response.Calendars[calendarId]
+  for _, period := range freeBusyCalendar.Busy {
+    startTime, _ := time.Parse(time.RFC3339, period.Start)
+    endTime, _ := time.Parse(time.RFC3339, period.End)
+    startInt := int32(startTime.Sub(referenceTime)/time.Millisecond)
+    endInt := int32(endTime.Sub(referenceTime)/time.Millisecond)
+    binary.Write(conn, binary.LittleEndian, startInt)
+    binary.Write(conn, binary.LittleEndian, endInt) 
+  }
+  var zero int32 = 0
+  binary.Write(conn, binary.LittleEndian, zero)
+  binary.Write(conn, binary.LittleEndian, zero)
 
-  fmt.Printf("%v Connection from %v complete\n", time.Now().Format(time.Stamp), conn.RemoteAddr())
+  Log("Connection from %v complete", conn.RemoteAddr())
 }
 
-func main() {
+func tcpListen() {
   listen, err := net.Listen("tcp", ":9001")
   if err != nil {
     fmt.Println(err)
     return
   }
-  fmt.Printf("%v Waiting for connections\n", time.Now().Format(time.Stamp))
+  Log("Waiting for TCP connections")
   for {
     conn, err := listen.Accept()
     if err != nil {
@@ -71,4 +80,29 @@ func main() {
     }
     go handleConnection(conn)
   }
+}
+
+func httpListen() {
+  http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    if transport.Token == nil || transport.Token.Expired() {
+      http.Redirect(w, r, oauthconfig.AuthCodeURL(""), http.StatusFound)
+    } else {
+      fmt.Fprintf(w, "Ok")
+    }
+  })
+  http.HandleFunc("/oauthcallback", func(w http.ResponseWriter, r *http.Request) {
+    code := r.FormValue("code")
+    transport.Exchange(code)
+    Log("OAuth callback with code %v", code)
+  })
+  Log("Waiting for HTTP connections")
+  err := http.ListenAndServe(":8081", nil)
+  if err != nil {
+    Log("%v", err)
+  }
+}
+
+func main() {
+  go tcpListen();
+  httpListen();
 }

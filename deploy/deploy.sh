@@ -1,4 +1,4 @@
-GOOS=linux GOARCH=386 CGO_ENABLED=0 go build -o build/main.linux main.go
+GOOS=linux GOARCH=386 CGO_ENABLED=0 go build -o build/main.linux main.go tokens.go
 ssh server <<'ENDSSH'
   mkdir -p /var/www/calefon/
 ENDSSH
