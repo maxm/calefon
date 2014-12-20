@@ -6,6 +6,7 @@ import (
   "time"
   "encoding/binary"
   "net"
+  "net/smtp"
   calendar "code.google.com/p/google-api-go-client/calendar/v3"
   "code.google.com/p/goauth2/oauth"
 )
@@ -17,15 +18,35 @@ var oauthconfig = &oauth.Config{
   AuthURL: "https://accounts.google.com/o/oauth2/auth",
   TokenURL: "https://accounts.google.com/o/oauth2/token",
   TokenCache: oauth.CacheFile("cache.json"),
-  RedirectURL: "http://localhost:8081/oauthcallback",
+  RedirectURL: "http://max.uy/calefon/oauthcallback",
   AccessType: "offline",
 }
 
 var transport *oauth.Transport = &oauth.Transport{Config: oauthconfig}
 
+var errorMessageSent bool = false
+
 func Log(message string, a ...interface{}) {
   message = fmt.Sprintf(message, a...)
   fmt.Printf("%v %v\n", time.Now().Format(time.Stamp), message)
+}
+
+func SendEmailError(err error) {
+  if errorMessageSent {
+    return
+  }
+  errorMessageSent = true
+  msg := `From: calefon@server.max.uy
+To: max@max.uy
+Subject: Calefon error
+
+Error: ` + err.Error() + `
+
+Login to calefon oauth again? http://max.uy/calefon`;
+  err = smtp.SendMail("localhost:25", nil, "calefon@server.max.uy", []string{"max@max.uy"}, []byte(msg))
+  if err != nil {
+    Log("Error sending mail: %v", err)
+  }
 }
 
 func handleConnection(conn net.Conn) {
@@ -46,9 +67,11 @@ func handleConnection(conn net.Conn) {
     TimeMax: referenceTime.Add(time.Hour*24*7).Format(time.RFC3339),
   }).Do()
   if err != nil {
+    SendEmailError(err)
     Log("service.FreeBusy.Query.Do error %v", err)
     return
   }
+  errorMessageSent = false
   var freeBusyCalendar = response.Calendars[calendarId]
   for _, period := range freeBusyCalendar.Busy {
     startTime, _ := time.Parse(time.RFC3339, period.Start)
@@ -93,6 +116,7 @@ func httpListen() {
   http.HandleFunc("/oauthcallback", func(w http.ResponseWriter, r *http.Request) {
     code := r.FormValue("code")
     transport.Exchange(code)
+    fmt.Fprintf(w, "Ok")
     Log("OAuth callback with code %v", code)
   })
   Log("Waiting for HTTP connections")
