@@ -20,6 +20,7 @@ var oauthconfig = &oauth.Config{
   TokenCache: oauth.CacheFile("cache.json"),
   RedirectURL: "http://max.uy/calefon/oauthcallback",
   AccessType: "offline",
+  ApprovalPrompt: "force",
 }
 
 var transport *oauth.Transport = &oauth.Transport{Config: oauthconfig}
